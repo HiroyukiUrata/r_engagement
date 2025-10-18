@@ -257,8 +257,18 @@ class ScraperApp:
         if not results:
             return
 
-        # カテゴリを抽出し、アルファベット順にソート
-        categories = sorted(list(set(item.get('category', 'N/A') for item in results)))
+        # カテゴリを抽出し、定義済みの優先度順にソートする
+        priority_order = [
+            "いいね多謝",
+            "新規フォロー＆いいね感謝",
+            "新規フォロー",
+            "いいね＆コレ！感謝",
+            "未フォロー＆いいね感謝",
+            "いいね感謝"
+        ]
+        found_categories = set(item.get('category', 'N/A') for item in results)
+        # 優先度リストに含まれるカテゴリを先に、残りをその後ろに（アルファベット順で）配置
+        categories = [cat for cat in priority_order if cat in found_categories] + sorted([cat for cat in found_categories if cat not in priority_order])
         self.category_vars = {}
 
         # "すべて選択/解除" チェックボックス
