@@ -1,0 +1,9 @@
+2025/10/18-01:12:55.885 2658 Reusing MANIFEST D:\Desktop\r_engagement\chrome-debug-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2025/10/18-01:12:55.894 2658 Recovering log #3
+2025/10/18-01:12:55.898 2658 Reusing old log D:\Desktop\r_engagement\chrome-debug-profile\Default\Local Storage\leveldb/000003.log 
+2025/10/18-02:16:08.173 3f70 Level-0 table #5: started
+2025/10/18-02:16:08.251 3f70 Level-0 table #5: 12683 bytes OK
+2025/10/18-02:16:08.303 3f70 Delete type=0 #3
+2025/10/18-02:41:25.085 3f70 Level-0 table #7: started
+2025/10/18-02:41:25.122 3f70 Level-0 table #7: 10764 bytes OK
+2025/10/18-02:41:25.167 3f70 Delete type=0 #4
