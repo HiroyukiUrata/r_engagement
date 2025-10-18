@@ -203,10 +203,13 @@ def main():
                         'latest_action_timestamp': notification['action_timestamp']
                     })
             logging.info(f"  -> {len(aggregated_users)}人のユニークユーザーに集約しました。")
+            
+            categorized_users = []
             for user in aggregated_users.values():
                 like_count = user['like_count']
                 is_following = user['is_following']
                 follow_count = user['follow_count']
+                collect_count = user['collect_count']
                 
                 if like_count >= 3:
                     user['category'] = "いいね多謝"
@@ -214,22 +217,29 @@ def main():
                     user['category'] = "新規フォロー＆いいね感謝"
                 elif like_count > 0 and not is_following: 
                     user['category'] = "未フォロー＆いいね感謝"
-                elif like_count > 0 and user['collect_count'] > 0:
+                elif like_count > 0 and collect_count > 0:
                     user['category'] = "いいね＆コレ！感謝"
+                elif follow_count > 0 and like_count == 0:
+                    user['category'] = "新規フォロー"
                 elif like_count > 0:
                     user['category'] = "いいね感謝"
                 else:
                     user['category'] = "その他"
+                
+                # 「その他」カテゴリは処理対象から除外
+                if user['category'] != "その他":
+                    categorized_users.append(user)
 
             # --- フェーズ3: 優先度に基づいてソート ---
             logging.info(f"--- フェーズ3: 優先度順にソートし、上位{MAX_USERS_TO_SCRAPE}件を抽出します。 ---")
             sorted_users = sorted(
-                aggregated_users.values(), 
+                categorized_users,
                 key=lambda u: (
                     -u['like_count'], # 1. いいねの数が多い（最優先）
                     -(u['follow_count'] > 0 and u['like_count'] > 0), # 2. 新規フォロー＆いいねがある
-                    u['is_following'], 
-                    -(u['collect_count'] > 0)
+                    -(u['follow_count'] > 0 and u['like_count'] == 0), # 3. 新規フォローのみ
+                    u['is_following'], # 4. フォロー状況
+                    -(u['collect_count'] > 0) # 5. コレ！がある
                 )
             )
             
