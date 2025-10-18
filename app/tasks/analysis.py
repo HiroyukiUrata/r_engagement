@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import json
+import unicodedata
 import random
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
@@ -19,12 +20,64 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 # --- 設定 ---
 TARGET_URL = "https://room.rakuten.co.jp/items"
-MAX_USERS_TO_SCRAPE = 5
+MAX_USERS_TO_SCRAPE = 50
 OUTPUT_JSON_FILE = "scraping_results.json"
 COMMENT_TEMPLATES_FILE = os.path.join(PROJECT_ROOT, "comment_templates.json")
 
 # --- ロガーの基本設定 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def extract_natural_name(full_name: str) -> str:
+    """
+    絵文字や装飾が含まれる可能性のあるフルネームから、自然な名前の部分を抽出する。
+    例: '春🌷身長が3cm伸びました😳' -> '春'
+    例: '𝐬𝐚𝐲𝐮¹²²⁵𝓡' -> 'sayu'
+    例: '❁mizuki❁' -> 'mizuki'
+    """
+    if not full_name:
+        return ""
+
+    # Unicodeの絵文字や特定の記号を区切り文字として定義
+    separators = re.compile(
+        r'['
+        u'\u2600-\u27BF'          # Miscellaneous Symbols
+        u'\U0001F300-\U0001F5FF'  # Miscellaneous Symbols and Pictographs
+        u'\U0001F600-\U0001F64F'  # Emoticons
+        u'\U0001F680-\U0001F6FF'  # Transport & Map Symbols
+        u'\U0001F1E0-\U0001F1FF'  # Flags (iOS)
+        u'\U0001F900-\U0001F9FF'  # Supplemental Symbols and Pictographs
+        u'|│￤＠@/｜*＊※☆★♪#＃♭🎀' # 全角・半角の記号類
+        u'|│￤＠@/｜*＊※☆★♪#＃♭🎀' # 全角・半角の記号類（♡は意図的に除外）
+        u']+' # 連続する区切り文字を一つとして扱う
+    )
+
+    # 区切り文字で文字列を分割
+    parts = separators.split(full_name)
+
+    # 分割されたパーツから、空でない最初の要素を探す
+    # 分割されたパーツから、空でない最初の要素を候補とする
+    name_candidate = ""
+    for part in parts:
+        cleaned_part = part.strip()
+        if cleaned_part:
+            return cleaned_part
+            name_candidate = cleaned_part
+            break
+    
+    if not name_candidate:
+        return full_name.strip() # 候補が見つからなければ元の名前を返す
+
+    # 適切なパーツが見つからなかった場合（名前全体が記号だった場合など）、元の名前をフォールバックとして返す
+    return full_name.strip()
+    # 候補の文字列を正規化 (例: 𝐬𝐚𝐲𝐮¹²²⁵𝓡 -> sayu1225R)
+    normalized_name = unicodedata.normalize('NFKC', name_candidate)
+
+    # 正規化された名前から、最初の数字や特定の記号までの部分を抽出
+    match = re.search(r'[\d_‐-]', normalized_name)
+    if match:
+        return normalized_name[:match.start()]
+    
+    return normalized_name
 
 def main():
     """
@@ -185,29 +238,40 @@ def main():
             # --- フェーズ4: URL取得 ---
             logging.info(f"--- フェーズ4: 上位{len(users_to_process)}人のプロフィールURLを取得します。 ---")
             final_user_data = []
+            last_scroll_position = 0  # スクロール位置を記憶する変数を初期化
+
             for i, user_info in enumerate(users_to_process):
                 logging.debug(f"  {i+1}/{len(users_to_process)}: 「{user_info['name']}」のURLを取得中...")
                 try:
+                    # 前回のスクロール位置に戻す
+                    if last_scroll_position > 0:
+                        page.evaluate(f"window.scrollTo(0, {last_scroll_position})")
+                        logging.debug(f"  スクロール位置を {last_scroll_position}px に復元しました。")
+
                     user_li_locator = page.locator(f"li[ng-repeat='notification in notifications.activityNotifications']:has-text(\"{user_info['name']}\")").first
                     image_container_locator = user_li_locator.locator("div.left-img")
                     
                     max_scroll_attempts_find = 15
                     is_found = False
                     for attempt in range(max_scroll_attempts_find):
-                        if image_container_locator.is_visible():
+                        if image_container_locator.count() > 0 and image_container_locator.is_visible():
                             is_found = True
                             break
                         logging.debug(f"  ユーザー「{user_info['name']}」の画像が見つかりません。スクロールします... ({attempt + 1}/{max_scroll_attempts_find})")
                         page.evaluate("window.scrollBy(0, 500)")
                         time.sleep(1)      
 
+                    if not is_found:
+                        raise PlaywrightError(f"スクロールしてもユーザー「{user_info['name']}」の要素が見つかりませんでした。")
+
+                    # ページ遷移の直前に現在のスクロール位置を記憶
+                    last_scroll_position = page.evaluate("window.scrollY")
                     image_container_locator.click()
                     
                     user_info['profile_page_url'] = page.url
                     logging.debug(f"  -> 取得したURL: {page.url}")
                     
                     page.go_back(wait_until="domcontentloaded")
-
                 except Exception as url_error:
                     logging.warning(f"  ユーザー「{user_info['name']}」のURL取得中にエラー: {url_error}")
                     user_info['profile_page_url'] = "取得失敗"
@@ -230,7 +294,14 @@ def main():
                     category = user.get('category', 'その他')
                     templates = comment_templates.get(category, comment_templates.get('その他', []))
                     if templates:
-                        user['comment_text'] = random.choice(templates)
+                        comment_template = random.choice(templates)
+                        natural_name = extract_natural_name(user.get('name', ''))
+                        if natural_name:
+                            # 名前が取得できた場合は、名前を挿入
+                            user['comment_text'] = comment_template.format(user_name=natural_name)
+                        else:
+                            # 名前が取得できなかった場合は、プレースホルダー部分を削除して不自然さをなくす
+                            user['comment_text'] = comment_template.replace("{user_name}さん、", "").strip()
                     else:
                         user['comment_text'] = "ご訪問ありがとうございます！" # フォールバック
             except FileNotFoundError:
