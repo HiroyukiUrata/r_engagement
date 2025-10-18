@@ -32,4 +32,3 @@ def convert_to_robust_selector(selector: str) -> str:
             robust_parts.append(part)
 
     return " ".join(robust_parts)
-

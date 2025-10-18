@@ -17,8 +17,11 @@ class ScraperApp:
 
         # --- データ保持用の変数 ---
         self.current_results = []
-        self.script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_scraping.py")
-        self.result_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scraping_results.json")
+        # プロジェクトのルートディレクトリを取得
+        self.project_root = os.path.dirname(os.path.abspath(__file__))
+        # 呼び出すスクリプトのパスを app/scraping.py に変更
+        self.script_path = os.path.join(self.project_root, "app", "scraping.py")
+        self.result_json_path = os.path.join(self.project_root, "output", "scraping_results.json")
 
         # スタイル設定
         style = ttk.Style()
@@ -89,7 +92,8 @@ class ScraperApp:
         self.tree.delete(*self.tree.get_children()) # テーブルをクリア
 
         # スレッドを作成して実行
-        command = ['python', '-u', self.script_path, '--task', 'analyze']
+        # モジュールとして実行するようにコマンドを変更
+        command = ['python', '-u', '-m', 'app.scraping', '--task', 'analyze']
         self.scraping_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
         self.scraping_thread.start()
 
@@ -108,6 +112,7 @@ class ScraperApp:
 
             self.process = subprocess.Popen(
                 command_args,
+                cwd=self.project_root, # モジュール実行のためカレントディレクトリを指定
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -116,15 +121,17 @@ class ScraperApp:
                 startupinfo=startupinfo,
                 env=env
             )
+            # デッドロックを避けるため、出力読み取りとwaitを分離
             for line in iter(self.process.stdout.readline, ''):
                 self.log_queue.put(line)
-            self.process.wait()
         except FileNotFoundError:
             self.log_queue.put("エラー: 'python'コマンドが見つかりません。PythonがPATHに設定されているか確認してください。")
         except Exception as e:
             self.log_queue.put(f"スクリプト実行中に予期せぬエラーが発生しました: {e}")
         finally:
             # 処理完了後にGUIに通知
+            if self.process:
+                self.process.wait() # サブプロセスの終了を待つ
             task_type = "analyze" if "--task" in command_args and "analyze" in command_args else "post"
             self.log_queue.put(("PROCESS_FINISHED", task_type))
 
@@ -317,7 +324,8 @@ class ScraperApp:
                 continue
 
             # 投稿処理を別スレッドで実行
-            command = ['python', '-u', self.script_path, '--task', 'post', '--url', profile_url]
+            # モジュールとして実行するようにコマンドを変更
+            command = ['python', '-u', '-m', 'app.scraping', '--task', 'post', '--url', profile_url]
             post_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
             post_thread.start()
 
