@@ -22,6 +22,7 @@ class ScraperApp:
         self.current_results = []
         self.all_rows_checked = False # ヘッダーチェックボックスの状態
         self.checked_items = {} # チェックボックスの状態を保持
+        self.last_clicked_item = None # Shift選択用に最後にクリックした行を保持
         # プロジェクトのルートディレクトリを取得
         self.category_icons = {
             "いいね多謝": "💛++",
@@ -59,12 +60,12 @@ class ScraperApp:
         self.right_panel.pack_propagate(False)
 
         # フィルターフレーム (右パネル上部)
-        self.filter_frame = ttk.LabelFrame(self.right_panel, text="フィルター")
-        self.filter_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+        self.filter_frame = ttk.LabelFrame(self.right_panel, text="フィルター")        
 
         # アクションフレーム (右パネル下部)
         self.action_frame = ttk.LabelFrame(self.right_panel, text="アクション")
-        self.action_frame.pack(side=tk.TOP, fill=tk.X)
+        self.action_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+        self.filter_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
 
         # --- 左側パネルのフレーム（テーブル） ---
         self.result_frame = ttk.LabelFrame(self.main_paned_window, text="スクレイピング結果")
@@ -106,6 +107,8 @@ class ScraperApp:
         self.tree.bind("<Double-1>", self.on_tree_double_click)
         # シングルクリックイベントをバインド（ヘッダーとセルの両方に対応）
         self.tree.bind("<Button-1>", self.on_tree_click)
+        # スペースキー押下イベントをバインド
+        self.tree.bind("<space>", self.on_space_key_press)
 
         # Treeviewのタグ設定（色分け用）
         self.tree.tag_configure('posted', foreground='green')
@@ -497,13 +500,20 @@ class ScraperApp:
             if column_id == '#1':
                 self.toggle_all_checkboxes()
         
-        elif region == "cell":
+        elif region == "cell": # セルがクリックされた場合
             column_id = self.tree.identify_column(event.x)
             item_id = self.tree.identify_row(event.y)
+
             # "selection"列（#1）のセルがクリックされた場合
             if column_id == '#1' and item_id:
+                # 通常のクリックでチェックボックスをトグル
                 self.toggle_checkbox(item_id)
 
+    def on_space_key_press(self, event):
+        """スペースキーが押されたときにフォーカスされている行のチェックボックスを切り替える"""
+        focused_item_id = self.tree.focus()
+        if focused_item_id:
+            self.toggle_checkbox(focused_item_id)
 
     def on_tree_double_click(self, event):
         """テーブルの行がダブルクリックされたときの処理"""
@@ -546,6 +556,20 @@ class ScraperApp:
         new_state = not current_state
         self.checked_items[item_id] = new_state
 
+        # 表示を更新
+        current_values = list(self.tree.item(item_id, "values"))
+        current_values[0] = "☑" if new_state else "☐"
+        self.tree.item(item_id, values=tuple(current_values))
+
+        self.update_post_button_state()
+
+    def toggle_checkboxes(self, item_ids, new_state):
+        """複数の行のチェックボックス状態を一度に変更する"""
+        for item_id in item_ids:
+            self.checked_items[item_id] = new_state
+            current_values = list(self.tree.item(item_id, "values"))
+            current_values[0] = "☑" if new_state else "☐"
+            self.tree.item(item_id, values=tuple(current_values))
         # 表示を更新
         current_values = list(self.tree.item(item_id, "values"))
         current_values[0] = "☑" if new_state else "☐"
