@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+.venv
+venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Application-specific
+chrome-debug-profile/
+scraping_results.json
+error_*.png
+.DS_Store
