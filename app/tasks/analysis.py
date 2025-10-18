@@ -5,6 +5,7 @@ import sys
 import time
 import json
 import unicodedata
+from datetime import datetime, timedelta
 import random
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
@@ -15,13 +16,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 from app.utils.selector_utils import convert_to_robust_selector
 
-# --- 出力ディレクトリの定義 ---
+# --- DB/出力ディレクトリの定義 ---
+DB_DIR = os.path.join(PROJECT_ROOT, "db")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 # --- 設定 ---
 TARGET_URL = "https://room.rakuten.co.jp/items"
-MAX_USERS_TO_SCRAPE = 50
-OUTPUT_JSON_FILE = "scraping_results.json"
+DB_JSON_FILE = "engagement_data.json"
 COMMENT_TEMPLATES_FILE = os.path.join(PROJECT_ROOT, "comment_templates.json")
 
 # --- ロガーの基本設定 ---
@@ -78,6 +79,31 @@ def extract_natural_name(full_name: str) -> str:
         return normalized_name[:match.start()]
     
     return normalized_name
+
+def get_latest_timestamp_from_db(db_path: str) -> datetime:
+    """
+    DBファイルから最も新しいlatest_action_timestampをdatetimeオブジェクトとして取得する。
+    """
+    latest_timestamp = datetime.min # 比較用の非常に古い日時で初期化
+    if not os.path.exists(db_path):
+        return latest_timestamp
+
+    try:
+        with open(db_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not data:
+            return latest_timestamp
+
+        for item in data:
+            ts_str = item.get('latest_action_timestamp')
+            if ts_str:
+                ts_dt = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                if ts_dt > latest_timestamp:
+                    latest_timestamp = ts_dt
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        logging.warning(f"DBファイルの読み込み中に軽微なエラーが発生しました: {e}")
+    
+    return latest_timestamp
 
 def main():
     """
@@ -230,10 +256,29 @@ def main():
                 if user['category'] != "その他":
                     categorized_users.append(user)
 
-            # --- フェーズ3: 優先度に基づいてソート ---
-            logging.info(f"--- フェーズ3: 優先度順にソートし、上位{MAX_USERS_TO_SCRAPE}件を抽出します。 ---")
+            # --- フェーズ3: 時間条件でフィルタリングし、優先度順にソート ---
+            logging.info(f"--- フェーズ3: 時間条件でユーザーをフィルタリングします。 ---")
+            
+            # 条件設定
+            db_path = os.path.join(DB_DIR, DB_JSON_FILE)
+            latest_db_timestamp = get_latest_timestamp_from_db(db_path)
+            twelve_hours_ago = datetime.now() - timedelta(hours=12)
+            
+            logging.info(f"  - DBの最新時刻: {latest_db_timestamp.strftime('%Y-%m-%d %H:%M:%S') if latest_db_timestamp > datetime.min else '（データなし）'}")
+            logging.info(f"  - 12時間前の時刻: {twelve_hours_ago.strftime('%Y-%m-%d %H:%M:%S')}")
+
+            users_to_process = []
+            for user in categorized_users:
+                action_time = datetime.strptime(user['latest_action_timestamp'], '%Y-%m-%d %H:%M:%S')
+                # 条件: 12時間以内で、かつDBの最新時刻より新しい
+                if action_time > twelve_hours_ago and action_time > latest_db_timestamp:
+                    users_to_process.append(user)
+            
+            logging.info(f"  -> {len(users_to_process)}人のユーザーが処理対象です。")
+
+            logging.info("優先度順にソートします。")
             sorted_users = sorted(
-                categorized_users,
+                users_to_process,
                 key=lambda u: (
                     -u['like_count'], # 1. いいねの数が多い（最優先）
                     -(u['follow_count'] > 0 and u['like_count'] > 0), # 2. 新規フォロー＆いいねがある
@@ -243,15 +288,13 @@ def main():
                 )
             )
             
-            users_to_process = sorted_users[:MAX_USERS_TO_SCRAPE]
-
             # --- フェーズ4: URL取得 ---
-            logging.info(f"--- フェーズ4: 上位{len(users_to_process)}人のプロフィールURLを取得します。 ---")
+            logging.info(f"--- フェーズ4: {len(sorted_users)}人のプロフィールURLを取得します。 ---")
             final_user_data = []
             last_scroll_position = 0  # スクロール位置を記憶する変数を初期化
 
-            for i, user_info in enumerate(users_to_process):
-                logging.debug(f"  {i+1}/{len(users_to_process)}: 「{user_info['name']}」のURLを取得中...")
+            for i, user_info in enumerate(sorted_users):
+                logging.debug(f"  {i+1}/{len(sorted_users)}: 「{user_info['name']}」のURLを取得中...")
                 try:
                     # 前回のスクロール位置に戻す
                     if last_scroll_position > 0:
@@ -319,13 +362,48 @@ def main():
             except Exception as e:
                 logging.error(f"コメント生成中にエラーが発生しました: {e}")
 
-            # --- フェーズ6: 結果をJSONファイルに保存 ---
+            # --- フェーズ6: 結果を既存DBとマージして保存 ---
             try:
-                os.makedirs(OUTPUT_DIR, exist_ok=True)
-                output_path = os.path.join(OUTPUT_DIR, OUTPUT_JSON_FILE)
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    json.dump(final_user_data, f, ensure_ascii=False, indent=4)
-                logging.info(f"結果を {output_path} に保存しました。")
+                os.makedirs(DB_DIR, exist_ok=True)
+                db_path = os.path.join(DB_DIR, DB_JSON_FILE)
+
+                # 1. 既存DBを読み込む
+                existing_users = {}
+                if os.path.exists(db_path):
+                    try:
+                        with open(db_path, 'r', encoding='utf-8') as f:
+                            existing_data = json.load(f)
+                            for user in existing_data:
+                                if 'id' in user:
+                                    existing_users[user['id']] = user
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        logging.warning(f"既存のDBファイル({db_path})の読み込みに失敗しました。新しいDBを作成します。")
+
+                # 2. 新しいデータをマージ（新しい情報で上書き）
+                logging.info(f"--- フェーズ6: {len(final_user_data)}件の新規・更新データを既存DBとマージします。 ---")
+                for new_user in final_user_data:
+                    existing_users[new_user['id']] = new_user
+
+                # 3. 24時間以上前の古いレコードをフィルタリング
+                logging.info("24時間以上経過した古いレコードをDBから削除します。")
+                twenty_four_hours_ago = datetime.now() - timedelta(hours=24)
+                
+                recent_users = []
+                for user_data in existing_users.values():
+                    action_time_str = user_data.get('latest_action_timestamp')
+                    if action_time_str:
+                        try:
+                            action_time = datetime.strptime(action_time_str, '%Y-%m-%d %H:%M:%S')
+                            if action_time >= twenty_four_hours_ago:
+                                recent_users.append(user_data)
+                        except ValueError:
+                            logging.warning(f"ユーザー '{user_data.get('name')}' の不正な日付形式のレコードをスキップ: {action_time_str}")
+
+                # 4. フィルタリング後のデータを最新アクション日時で降順ソートして保存
+                final_data_to_save = sorted(recent_users, key=lambda u: u.get('latest_action_timestamp', ''), reverse=True)
+                with open(db_path, 'w', encoding='utf-8') as f:
+                    json.dump(final_data_to_save, f, ensure_ascii=False, indent=4)
+                logging.info(f"マージとクリーンアップ後の全{len(final_data_to_save)}件のデータを {db_path} に保存しました。")
             except Exception as e:
                 logging.error(f"JSONファイルへの保存中にエラーが発生しました: {e}")
 

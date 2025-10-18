@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 from tkinter.constants import ANCHOR
 from collections import defaultdict
+from datetime import datetime
 import subprocess
 import threading
 import json
@@ -22,10 +23,19 @@ class ScraperApp:
         self.all_rows_checked = False # ヘッダーチェックボックスの状態
         self.checked_items = {} # チェックボックスの状態を保持
         # プロジェクトのルートディレクトリを取得
+        self.category_icons = {
+            "いいね多謝": "💛++",
+            "新規フォロー＆いいね感謝": "👤+💛",
+            "新規フォロー": "👤",
+            "いいね＆コレ！感謝": "💛+★",
+            "未フォロー＆いいね感謝": "💛",
+            "いいね感謝": "💛"
+        }
+
         self.project_root = os.path.dirname(os.path.abspath(__file__))
         # 呼び出すスクリプトのパスを app/scraping.py に変更
-        self.script_path = os.path.join(self.project_root, "app", "scraping.py")
-        self.result_json_path = os.path.join(self.project_root, "output", "scraping_results.json")
+        self.analysis_script_path = os.path.join(self.project_root, "app", "tasks", "analysis.py")
+        self.db_path = os.path.join(self.project_root, "db", "engagement_data.json")
 
         # スタイル設定
         style = ttk.Style()
@@ -74,6 +84,7 @@ class ScraperApp:
 
         # フィルター用チェックボックス
         self.category_vars = {}
+        self.show_posted_var = tk.BooleanVar(value=False) # 投稿済表示のチェックボックス用
 
         # 結果表示用Treeview (テーブル)
         self.tree = ttk.Treeview(self.result_frame, show='headings')
@@ -82,6 +93,9 @@ class ScraperApp:
         self.tree.bind("<Double-1>", self.on_tree_double_click)
         # シングルクリックイベントをバインド（ヘッダーとセルの両方に対応）
         self.tree.bind("<Button-1>", self.on_tree_click)
+
+        # Treeviewのタグ設定（色分け用）
+        self.tree.tag_configure('posted', foreground='green')
 
         # アクションフレーム
         self.post_button = ttk.Button(self.action_frame, text="投稿実行", command=self.execute_post_action, state=tk.DISABLED)
@@ -96,6 +110,9 @@ class ScraperApp:
         
         # アプリケーション起動時にデバッグ用Chromeを起動する
         self.launch_debug_chrome()
+        
+        # 起動時にDBファイルを自動で読み込む
+        self.load_db_file()
 
     def start_scraping_thread(self):
         """スクレイピング処理を別スレッドで開始する"""
@@ -181,8 +198,8 @@ class ScraperApp:
         self.load_button.config(state=tk.NORMAL)
 
         try:
-            # 分析とコメント生成が完了した最終結果を読み込む
-            with open(self.result_json_path, 'r', encoding='utf-8') as f:
+            # 分析とコメント生成が完了したDBファイルを読み込む
+            with open(self.db_path, 'r', encoding='utf-8') as f:
                 results = json.load(f)
             self.display_results_in_table(results)
             messagebox.showinfo("成功", "分析が正常に完了しました。")
@@ -197,6 +214,20 @@ class ScraperApp:
         # 投稿ボタンはテーブルの行が選択されていれば有効化
         if self.tree.selection():
             self.post_button.config(state=tk.NORMAL)
+
+    def load_db_file(self):
+        """DBとして使用するJSONファイルを読み込む"""
+        if not os.path.exists(self.db_path):
+            self.log_text.insert(tk.END, f"データベースファイル ({self.db_path}) が見つかりません。\nスクレイピングを実行して作成してください。\n")
+            return
+        
+        try:
+            with open(self.db_path, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            self.display_results_in_table(results)
+            self.status_label.config(text=f"データベース '{os.path.basename(self.db_path)}' をロードしました")
+        except Exception as e:
+            messagebox.showerror("DB読込エラー", f"データベースファイルの読み込みに失敗しました:\n{e}")
 
     def load_json_from_file(self):
         """ファイルダイアログを開き、JSONファイルを読み込んでテーブルに表示する"""
@@ -257,6 +288,11 @@ class ScraperApp:
         if not results:
             return
 
+        # カテゴリごとの件数を集計
+        category_counts = defaultdict(int)
+        for item in results:
+            category_counts[item.get('category', 'N/A')] += 1
+
         # カテゴリを抽出し、定義済みの優先度順にソートする
         priority_order = [
             "いいね多謝",
@@ -271,16 +307,56 @@ class ScraperApp:
         categories = [cat for cat in priority_order if cat in found_categories] + sorted([cat for cat in found_categories if cat not in priority_order])
         self.category_vars = {}
 
+        # ウィンドウの描画を待ってから幅を取得するためにafterを使用
+        self.master.after(100, lambda: self.populate_filters_grid(categories, category_counts))
+
+    def populate_filters_grid(self, categories, category_counts):
+        """gridレイアウトでフィルターを動的に配置する"""
+        # 既存のウィジェットをクリア
+        for widget in self.filter_frame.winfo_children():
+            widget.destroy()
+
+        current_row, current_col = 0, 0
+        current_line_width = 0
+        # パディングを考慮して、利用可能な最大幅を少し減らす
+        max_width = self.filter_frame.winfo_width() - 20 
+
+        # "投稿済を表示" チェックボックス
+        self.show_posted_var.set(False) # デフォルトはオフ
+        show_posted_cb = ttk.Checkbutton(self.filter_frame, text="投稿済を表示", variable=self.show_posted_var, command=self.apply_filter)
+        show_posted_cb.grid(row=current_row, column=current_col, sticky='w', padx=5, pady=2)
+        current_line_width += show_posted_cb.winfo_reqwidth() + 10 # 自身の幅とpadding
+        current_col += 1
+
         # "すべて選択/解除" チェックボックス
         self.all_categories_var = tk.BooleanVar(value=True)
         all_cb = ttk.Checkbutton(self.filter_frame, text="すべて選択/解除", variable=self.all_categories_var, command=self.toggle_all_categories)
-        all_cb.pack(side=tk.LEFT, padx=5, pady=2)
+        if current_line_width + all_cb.winfo_reqwidth() > max_width:
+            current_row += 1
+            current_col = 0
+            current_line_width = 0
+        all_cb.grid(row=current_row, column=current_col, sticky='w', padx=5, pady=2)
+        current_line_width += all_cb.winfo_reqwidth() + 10
+        current_col += 1
 
         for category in categories:
             var = tk.BooleanVar(value=True)
-            cb = ttk.Checkbutton(self.filter_frame, text=category, variable=var, command=self.apply_filter)
-            cb.pack(side=tk.LEFT, padx=5, pady=2)
+            icon = self.category_icons.get(category, "❓")
+            count = category_counts.get(category, 0)
+            cb = ttk.Checkbutton(self.filter_frame, text=f"{icon} {category} ({count})", variable=var, command=self.apply_filter)
+            
+            if current_line_width + cb.winfo_reqwidth() > max_width and current_col > 0:
+                current_row += 1
+                current_col = 0
+                current_line_width = 0
+            
+            cb.grid(row=current_row, column=current_col, sticky='w', padx=5, pady=2)
+            current_line_width += cb.winfo_reqwidth() + 10
+            current_col += 1
             self.category_vars[category] = var
+        
+        # すべてのフィルターウィジェットが配置された後にフィルターを適用
+        self.apply_filter()
 
     def toggle_all_categories(self):
         """すべてのカテゴリチェックボックスの状態を切り替える"""
@@ -306,12 +382,16 @@ class ScraperApp:
 
         # ヘッダーを定義
         headers = {
-            "selection": "☑", "name": "ユーザー名", "post_status": "投稿ステータス", "category": "カテゴリ",
-            "comment_text": "生成コメント", "like_count": "いいね", "collect_count": "コレ！", "follow_count": "フォロー", "comment_count": "コメント",
-            "latest_action_timestamp": "最終アクション日時",
-            "is_following": "フォロー状況", "profile_page_url": "プロフィールURL"
+            "selection": "☑", "is_following": "👤", "name": "ユーザー名", "category": "Cat", "has_comment": "💬",
+            "comment_text": "生成コメント", "follow_count": "F", "comment_count": "C", 
+            "like_count": "♡", "collect_count": "★", "latest_action_timestamp": "🕒"
         }
-        self.tree["columns"] = list(headers.keys())
+        # profile_page_urlはデータとしては保持するが表示はしない
+        all_columns = list(headers.keys())
+        self.tree["columns"] = all_columns
+        # 数値列とURL列を非表示にする
+        display_columns = [col for col in all_columns if col not in ["follow_count", "comment_count", "like_count", "collect_count"]]
+        self.tree["displaycolumns"] = display_columns
 
         # チェックボックスの状態をリセット
         self.checked_items = {str(i): False for i in range(len(results))}
@@ -326,44 +406,17 @@ class ScraperApp:
         self.tree.heading("selection", text="☐") # ヘッダーのチェックボックス
         self.tree.column("selection", width=40, anchor=tk.CENTER, stretch=False)
         self.tree.column("name", width=150)
-        self.tree.column("comment_text", width=200)
-        self.tree.column("post_status", width=100, anchor=tk.CENTER)
-        self.tree.column("profile_page_url", width=200)
-        # カウント系は幅を狭くして中央揃え
-        self.tree.column("like_count", width=50, anchor=tk.CENTER)
-        self.tree.column("collect_count", width=50, anchor=tk.CENTER)
-        self.tree.column("follow_count", width=50, anchor=tk.CENTER)
-        self.tree.column("comment_count", width=60, anchor=tk.CENTER)
-        self.tree.column("is_following", width=80, anchor=tk.CENTER)
-        self.tree.column("latest_action_timestamp", width=140, anchor=tk.W)
-        self.tree.column("category", width=140)
+        self.tree.column("comment_text", width=300)
+        self.tree.column("is_following", width=40, anchor=tk.CENTER)
+        self.tree.column("latest_action_timestamp", width=100, anchor=tk.W)
+        self.tree.column("category", width=40, anchor=tk.CENTER)
+        self.tree.column("has_comment", width=40, anchor=tk.CENTER)
 
         # フィルターをセットアップ
         self.setup_category_filters(results)
 
-        # データを挿入
-        for i, item in enumerate(results):
-            # ブーリアン値を分かりやすい文字列に変換
-            is_following_text = "フォロー中" if item.get('is_following', False) else "未フォロー"
-
-            values = (
-                "☐", # チェックボックスの初期状態
-                item.get('name', ''),
-                item.get('post_status', '未処理'), # 投稿ステータスの初期値
-                item.get('category', ''),
-                item.get('comment_text', ''), # 生成されたコメント
-                item.get('like_count', 0),
-                item.get('collect_count', 0),
-                item.get('follow_count', 0),
-                item.get('comment_count', 0),
-                item.get('latest_action_timestamp', ''),
-                is_following_text,
-                item.get('profile_page_url', '')
-            )
-            # iidで行を識別できるようにする
-            self.tree.insert("", tk.END, iid=str(i), values=values)
-
-        self.apply_filter() # 初期表示
+        # データの描画は、フィルターのセットアップ後に apply_filter で一度だけ行う
+        # このメソッドではデータの保持とフィルターのセットアップのみに専念する
 
     def apply_filter(self):
         """カテゴリフィルターを適用してTreeviewの表示を更新する"""
@@ -371,21 +424,45 @@ class ScraperApp:
         self.tree.delete(*self.tree.get_children())
 
         selected_categories = {cat for cat, var in self.category_vars.items() if var.get()}
+        show_posted = self.show_posted_var.get()
 
         for i, item in enumerate(self.current_results):
+            is_posted = item.get('post_status') == '投稿済'
+            if is_posted and not show_posted: # 「投稿済を表示」がオフの時は、投稿済アイテムをスキップ
+                continue # 投稿済で、表示する設定でなければスキップ
+
             if item.get('category') in selected_categories:
-                is_following_text = "フォロー中" if item.get('is_following', False) else "未フォロー"
                 checked_char = "☑" if self.checked_items.get(str(i)) else "☐"
+                is_following_icon = "👤" if item.get('is_following', False) else ""
+                category_icon = self.category_icons.get(item.get('category', ''), '❓')
+                has_comment_icon = "💬" if item.get('comment_count', 0) > 0 else ""
+                user_name = item.get('name', '')
+                if item.get('post_status') == '投稿済':
+                    user_name = f"[済] {user_name}"
+                
+                # 日時フォーマットの変更
+                timestamp_str = item.get('latest_action_timestamp', '')
+                formatted_timestamp = ""
+                if timestamp_str:
+                    try:
+                        formatted_timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S').strftime('%m/%d %H:%M')
+                    except ValueError:
+                        formatted_timestamp = timestamp_str # パース失敗時はそのまま表示
+
                 values = (
                     checked_char,
-                    item.get('name', ''), item.get('post_status', '未処理'),
-                    item.get('category', ''), item.get('comment_text', ''),
-                    item.get('like_count', 0), item.get('collect_count', 0),
+                    is_following_icon,
+                    user_name,
+                    category_icon, has_comment_icon, item.get('comment_text', ''),
                     item.get('follow_count', 0), item.get('comment_count', 0),
-                    item.get('latest_action_timestamp', ''), is_following_text,
-                    item.get('profile_page_url', '')
+                    item.get('like_count', 0), item.get('collect_count', 0),
+                    formatted_timestamp
                 )
-                self.tree.insert("", tk.END, iid=str(i), values=values)
+                # 投稿ステータスに応じてタグを設定
+                tags = ()
+                if item.get('post_status') == '投稿済':
+                    tags = ('posted',)
+                self.tree.insert("", tk.END, iid=str(i), values=values, tags=tags)
 
     def on_tree_click(self, event):
         """Treeviewのクリックイベントを処理する（ヘッダーまたはセル）"""
@@ -410,12 +487,9 @@ class ScraperApp:
         item_id = self.tree.identify_row(event.y)
         if not item_id: return
 
-        item_values = self.tree.item(item_id, "values")
-        # ヘッダーのキーと値の辞書を作成
-        column_keys = self.tree["columns"]
-        item_dict = dict(zip(column_keys, item_values))
-
-        url = item_dict.get("profile_page_url")
+        # current_resultsから元の完全なデータを取得
+        original_index = int(item_id)
+        url = self.current_results[original_index].get("profile_page_url")
         if url and url.startswith("http"):
             webbrowser.open_new_tab(url)
         else:
@@ -493,11 +567,17 @@ class ScraperApp:
             post_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
             post_thread.start()
 
-            # 投稿ステータスを「処理中」に更新 (表示されている行のみ)
+            # 投稿ステータスを「投稿済」に更新し、行の色を変更
             if self.tree.exists(item_id):
-                current_values = list(self.tree.item(item_id, 'values'))
-                current_values[2] = "⏳ 処理中..." # "投稿ステータス"列を更新
+                # 色付けのタグを適用
+                self.tree.item(item_id, tags=('posted',))
+                # 名前の表示を更新
+                current_values = list(self.tree.item(item_id, "values"))
+                current_values[2] = f"[済] {item_dict.get('name', '')}" # name列
                 self.tree.item(item_id, values=tuple(current_values))
+
+            # 内部データも更新
+            self.current_results[original_index]['post_status'] = '投稿済'
 
             # 処理を開始したアイテムのチェックを内部的に解除
             self.checked_items[item_id] = False
@@ -506,7 +586,12 @@ class ScraperApp:
         self.all_rows_checked = False
         self.tree.heading("selection", text="☐")
 
-            # 実際の完了はログで確認し、手動で更新する想定
+        # 投稿ステータスの変更をDBに保存
+        try:
+            with open(self.db_path, 'w', encoding='utf-8') as f:
+                json.dump(self.current_results, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            messagebox.showerror("DB保存エラー", f"投稿ステータスの更新中にDBへの保存に失敗しました:\n{e}")
 
     def launch_debug_chrome(self):
         """start_chrome_debug.bat を実行してデバッグ用Chromeを起動する"""
