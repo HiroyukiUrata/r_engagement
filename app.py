@@ -80,6 +80,9 @@ class ScraperApp:
 
         # 定期的なUI更新を開始
         self.master.after(100, self.process_log_queue)
+        
+        # アプリケーション起動時にデバッグ用Chromeを起動する
+        self.launch_debug_chrome()
 
     def start_scraping_thread(self):
         """スクレイピング処理を別スレッドで開始する"""
@@ -93,7 +96,7 @@ class ScraperApp:
 
         # スレッドを作成して実行
         # モジュールとして実行するようにコマンドを変更
-        command = ['python', '-u', '-m', 'app.scraping', '--task', 'analyze']
+        command = ['python', '-u', '-m', 'app.tasks.analysis']
         self.scraping_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
         self.scraping_thread.start()
 
@@ -132,8 +135,12 @@ class ScraperApp:
             # 処理完了後にGUIに通知
             if self.process:
                 self.process.wait() # サブプロセスの終了を待つ
-            task_type = "analyze" if "--task" in command_args and "analyze" in command_args else "post"
-            self.log_queue.put(("PROCESS_FINISHED", task_type))
+            
+            # 実行されたモジュール名からタスクタイプを判別
+            if 'app.tasks.analysis' in " ".join(command_args):
+                self.log_queue.put(("PROCESS_FINISHED", "analyze"))
+            elif 'app.tasks.posting' in " ".join(command_args):
+                self.log_queue.put(("PROCESS_FINISHED", "post"))
 
     def process_log_queue(self):
         """キューからログを取得してUIに表示する"""
@@ -156,16 +163,16 @@ class ScraperApp:
 
     def on_scraping_complete(self):
         """分析スクレイピング完了時の処理"""
-        self.status_label.config(text="処理完了")
+        self.status_label.config(text="全処理完了")
         self.run_button.config(state=tk.NORMAL)
         self.load_button.config(state=tk.NORMAL)
 
-        # 結果ファイルを読み込んで表示
         try:
+            # 分析とコメント生成が完了した最終結果を読み込む
             with open(self.result_json_path, 'r', encoding='utf-8') as f:
                 results = json.load(f)
             self.display_results_in_table(results)
-            messagebox.showinfo("成功", "スクレイピングが正常に完了しました。")
+            messagebox.showinfo("成功", "分析が正常に完了しました。")
         except FileNotFoundError:
             messagebox.showwarning("完了", "処理は完了しましたが、結果ファイルが見つかりませんでした。")
         except Exception as e:
@@ -243,22 +250,30 @@ class ScraperApp:
         # ヘッダーを定義
         headers = {
             "name": "ユーザー名", "post_status": "投稿ステータス", "category": "カテゴリ",
-            "like_count": "いいね数", "collect_count": "コレ！数", "is_following": "フォロー状況",
-            "profile_page_url": "プロフィールURL"
+            "comment_text": "生成コメント", "like_count": "いいね", "collect_count": "コレ！", "follow_count": "フォロー", "comment_count": "コメント",
+            "latest_action_timestamp": "最終アクション日時",
+            "is_following": "フォロー状況", "profile_page_url": "プロフィールURL"
         }
         self.tree["columns"] = list(headers.keys())
 
         for key, text in headers.items():
             self.tree.heading(key, text=text)
-            self.tree.column(key, anchor=tk.W, width=120)
+            # デフォルトの幅を設定
+            self.tree.column(key, anchor=tk.W, width=100)
 
         # カラム幅の調整
         self.tree.column("name", width=150)
+        self.tree.column("comment_text", width=200)
         self.tree.column("post_status", width=100, anchor=tk.CENTER)
         self.tree.column("profile_page_url", width=200)
-        self.tree.column("like_count", width=60, anchor=tk.CENTER)
-        self.tree.column("collect_count", width=60, anchor=tk.CENTER)
+        # カウント系は幅を狭くして中央揃え
+        self.tree.column("like_count", width=50, anchor=tk.CENTER)
+        self.tree.column("collect_count", width=50, anchor=tk.CENTER)
+        self.tree.column("follow_count", width=50, anchor=tk.CENTER)
+        self.tree.column("comment_count", width=60, anchor=tk.CENTER)
         self.tree.column("is_following", width=80, anchor=tk.CENTER)
+        self.tree.column("latest_action_timestamp", width=140, anchor=tk.W)
+        self.tree.column("category", width=140)
 
         # データを挿入
         for i, item in enumerate(results):
@@ -269,8 +284,12 @@ class ScraperApp:
                 item.get('name', ''),
                 item.get('post_status', '未処理'), # 投稿ステータスの初期値
                 item.get('category', ''),
+                item.get('comment_text', ''), # 生成されたコメント
                 item.get('like_count', 0),
                 item.get('collect_count', 0),
+                item.get('follow_count', 0),
+                item.get('comment_count', 0),
+                item.get('latest_action_timestamp', ''),
                 is_following_text,
                 item.get('profile_page_url', '')
             )
@@ -318,14 +337,15 @@ class ScraperApp:
             
             profile_url = item_dict.get("profile_page_url")
             user_name = item_dict.get("name")
+            comment_text = item_dict.get("comment_text") # 生成されたコメントを取得
 
             if not profile_url or not profile_url.startswith("http"):
                 messagebox.showwarning("URLエラー", f"「{user_name}」さんのプロフィールURLが無効なため、処理をスキップします。")
                 continue
 
             # 投稿処理を別スレッドで実行
-            # モジュールとして実行するようにコマンドを変更
-            command = ['python', '-u', '-m', 'app.scraping', '--task', 'post', '--url', profile_url]
+            # モジュールとして実行し、コメントも引数で渡す
+            command = ['python', '-u', '-m', 'app.tasks.posting', '--url', profile_url, '--comment', comment_text]
             post_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
             post_thread.start()
 
@@ -334,6 +354,19 @@ class ScraperApp:
             current_values[1] = "⏳ 処理中..." # "投稿ステータス"列を更新
             self.tree.item(item_id, values=tuple(current_values))
             # 実際の完了はログで確認し、手動で更新する想定
+
+    def launch_debug_chrome(self):
+        """start_chrome_debug.bat を実行してデバッグ用Chromeを起動する"""
+        bat_path = os.path.join(self.project_root, "start_chrome_debug.bat")
+        if os.path.exists(bat_path):
+            try:
+                # コンソールウィンドウを表示せずにバッチファイルを実行
+                subprocess.Popen([bat_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                self.log_text.insert(tk.END, "デバッグ用Chromeの起動を試みました。\n")
+            except Exception as e:
+                self.log_text.insert(tk.END, f"Chromeの起動に失敗しました: {e}\n")
+        else:
+            self.log_text.insert(tk.END, "start_chrome_debug.bat が見つかりません。\n")
 
 
 if __name__ == "__main__":
