@@ -510,10 +510,21 @@ class ScraperApp:
                 self.toggle_checkbox(item_id)
 
     def on_space_key_press(self, event):
-        """スペースキーが押されたときにフォーカスされている行のチェックボックスを切り替える"""
-        focused_item_id = self.tree.focus()
-        if focused_item_id:
-            self.toggle_checkbox(focused_item_id)
+        """スペースキー押下で、選択行の一括チェック変更、またはフォーカス行のチェック変更を行う"""
+        selected_items = self.tree.selection()
+
+        if selected_items:
+            # 複数行が選択されている場合：一括で状態を切り替える
+            # 選択範囲の最初のアイテムの状態を基準に、新しい状態を決定する
+            first_item_id = selected_items[0]
+            new_state = not self.checked_items.get(first_item_id, False)
+            self.toggle_checkboxes(selected_items, new_state)
+        else:
+            # 行が選択されていない場合：フォーカスされている行の状態を切り替える
+            focused_item_id = self.tree.focus()
+            if focused_item_id:
+                self.toggle_checkbox(focused_item_id)
+
 
     def on_tree_double_click(self, event):
         """テーブルの行がダブルクリックされたときの処理"""
@@ -570,10 +581,6 @@ class ScraperApp:
             current_values = list(self.tree.item(item_id, "values"))
             current_values[0] = "☑" if new_state else "☐"
             self.tree.item(item_id, values=tuple(current_values))
-        # 表示を更新
-        current_values = list(self.tree.item(item_id, "values"))
-        current_values[0] = "☑" if new_state else "☐"
-        self.tree.item(item_id, values=tuple(current_values))
 
         self.update_post_button_state()
 
