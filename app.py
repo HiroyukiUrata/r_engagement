@@ -16,7 +16,7 @@ class ScraperApp:
     def __init__(self, master):
         self.master = master
         master.title("楽天ROOM エンゲージメント分析ツール")
-        master.geometry("950x700") # 横幅を少し広げます
+        master.geometry("1050x700") # 横幅を広げます
 
         # --- データ保持用の変数 ---
         self.current_results = []
@@ -45,24 +45,32 @@ class ScraperApp:
         self.top_frame = ttk.Frame(master, padding="10")
         self.top_frame.pack(fill=tk.X)
 
-        self.middle_frame = ttk.LabelFrame(master, text="ログ出力", padding="10")
-        self.middle_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # ログ表示用のフレーム（初期状態は非表示）
+        self.log_frame = ttk.LabelFrame(master, text="ログ出力", padding="10")
+        # pack_infoを保存しておく
+        self.log_frame_pack_info = {'fill': tk.X, 'padx': 10, 'pady': 5}
 
-        self.bottom_frame = ttk.Frame(master, padding="10")
-        self.bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # メインコンテンツエリア（テーブルと右側パネル）
+        self.main_paned_window = ttk.PanedWindow(master, orient=tk.HORIZONTAL)
+        self.main_paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        # アクションフレームを右側に固定幅で配置
-        self.action_frame = ttk.LabelFrame(self.bottom_frame, text="アクション", width=150)
-        self.action_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
-        self.action_frame.pack_propagate(False) # width指定を有効にする
+        # --- 右側パネルのフレーム ---
+        self.right_panel = ttk.Frame(self.main_paned_window, width=280) # 右側パネルの初期幅
+        self.right_panel.pack_propagate(False)
 
-        # 結果表示フレーム（左側）
-        self.result_display_frame = ttk.Frame(self.bottom_frame)
-        self.result_display_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.filter_frame = ttk.LabelFrame(self.result_display_frame, text="カテゴリフィルター")
-        self.filter_frame.pack(fill=tk.X, pady=(0, 5))
-        self.result_frame = ttk.LabelFrame(self.result_display_frame, text="スクレイピング結果")
-        self.result_frame.pack(fill=tk.BOTH, expand=True)
+        # フィルターフレーム (右パネル上部)
+        self.filter_frame = ttk.LabelFrame(self.right_panel, text="フィルター")
+        self.filter_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        # アクションフレーム (右パネル下部)
+        self.action_frame = ttk.LabelFrame(self.right_panel, text="アクション")
+        self.action_frame.pack(side=tk.TOP, fill=tk.X)
+
+        # --- 左側パネルのフレーム（テーブル） ---
+        self.result_frame = ttk.LabelFrame(self.main_paned_window, text="スクレイピング結果")
+
+        self.main_paned_window.add(self.result_frame, weight=1) # 左側をリサイズ可能に
+        self.main_paned_window.add(self.right_panel)
 
         # --- ウィジェットの作成 ---
         # トップフレーム
@@ -75,11 +83,16 @@ class ScraperApp:
         self.export_button = ttk.Button(self.top_frame, text="結果をエクスポート", command=self.export_results_to_json, state=tk.DISABLED)
         self.export_button.pack(side=tk.LEFT, padx=5)
 
+        # ログ表示切り替えチェックボックス
+        self.log_visible_var = tk.BooleanVar(value=False) # デフォルトは非表示
+        self.log_toggle_button = ttk.Checkbutton(self.top_frame, text="ログ表示", variable=self.log_visible_var, command=self.toggle_log_display)
+        self.log_toggle_button.pack(side=tk.LEFT, padx=5)
+
         self.status_label = ttk.Label(self.top_frame, text="待機中...")
         self.status_label.pack(side=tk.RIGHT, padx=5)
 
         # ログ表示用テキストエリア
-        self.log_text = scrolledtext.ScrolledText(self.middle_frame, wrap=tk.WORD, height=10)
+        self.log_text = scrolledtext.ScrolledText(self.log_frame, wrap=tk.WORD, height=8)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
         # フィルター用チェックボックス
@@ -99,11 +112,14 @@ class ScraperApp:
 
         # アクションフレーム
         self.post_button = ttk.Button(self.action_frame, text="投稿実行", command=self.execute_post_action, state=tk.DISABLED)
-        self.post_button.pack(pady=10, padx=10, anchor='n')
+        self.post_button.pack(pady=10, padx=10, fill=tk.X)
 
         # サブプロセスとキューの初期化
         self.process = None
         self.log_queue = queue.Queue()
+
+        # 初期状態でログ表示を更新
+        self.toggle_log_display()
 
         # 定期的なUI更新を開始
         self.master.after(100, self.process_log_queue)
@@ -113,6 +129,13 @@ class ScraperApp:
         
         # 起動時にDBファイルを自動で読み込む
         self.load_db_file()
+
+    def toggle_log_display(self):
+        """ログ表示エリアの表示/非表示を切り替える"""
+        if self.log_visible_var.get():
+            self.log_frame.pack(self.log_frame_pack_info)
+        else:
+            self.log_frame.pack_forget()
 
     def start_scraping_thread(self):
         """スクレイピング処理を別スレッドで開始する"""
@@ -319,7 +342,7 @@ class ScraperApp:
         current_row, current_col = 0, 0
         current_line_width = 0
         # パディングを考慮して、利用可能な最大幅を少し減らす
-        max_width = self.filter_frame.winfo_width() - 20 
+        max_width = self.filter_frame.winfo_width() - 20 if self.filter_frame.winfo_width() > 20 else 260
 
         # "投稿済を表示" チェックボックス
         self.show_posted_var.set(False) # デフォルトはオフ
