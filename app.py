@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
+from tkinter.constants import ANCHOR
+from collections import defaultdict
 import subprocess
 import threading
 import json
@@ -17,6 +19,8 @@ class ScraperApp:
 
         # --- データ保持用の変数 ---
         self.current_results = []
+        self.all_rows_checked = False # ヘッダーチェックボックスの状態
+        self.checked_items = {} # チェックボックスの状態を保持
         # プロジェクトのルートディレクトリを取得
         self.project_root = os.path.dirname(os.path.abspath(__file__))
         # 呼び出すスクリプトのパスを app/scraping.py に変更
@@ -37,13 +41,18 @@ class ScraperApp:
         self.bottom_frame = ttk.Frame(master, padding="10")
         self.bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.result_frame = ttk.LabelFrame(self.bottom_frame, text="スクレイピング結果")
-
-        self.action_frame = ttk.LabelFrame(self.bottom_frame, text="アクション")
-        # 先に右側に固定幅のフレームを配置
+        # アクションフレームを右側に固定幅で配置
+        self.action_frame = ttk.LabelFrame(self.bottom_frame, text="アクション", width=150)
         self.action_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
-        # 残りのスペースを結果表示フレームが使用するように設定
-        self.result_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.action_frame.pack_propagate(False) # width指定を有効にする
+
+        # 結果表示フレーム（左側）
+        self.result_display_frame = ttk.Frame(self.bottom_frame)
+        self.result_display_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.filter_frame = ttk.LabelFrame(self.result_display_frame, text="カテゴリフィルター")
+        self.filter_frame.pack(fill=tk.X, pady=(0, 5))
+        self.result_frame = ttk.LabelFrame(self.result_display_frame, text="スクレイピング結果")
+        self.result_frame.pack(fill=tk.BOTH, expand=True)
 
         # --- ウィジェットの作成 ---
         # トップフレーム
@@ -63,16 +72,20 @@ class ScraperApp:
         self.log_text = scrolledtext.ScrolledText(self.middle_frame, wrap=tk.WORD, height=10)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
+        # フィルター用チェックボックス
+        self.category_vars = {}
+
         # 結果表示用Treeview (テーブル)
         self.tree = ttk.Treeview(self.result_frame, show='headings')
         self.tree.pack(fill=tk.BOTH, expand=True)
         # Treeviewのダブルクリックイベントに関数をバインド
-        self.tree.bind("<Double-1>", self.on_item_double_click)
-        self.tree.bind("<<TreeviewSelect>>", self.on_item_select)
+        self.tree.bind("<Double-1>", self.on_tree_double_click)
+        # シングルクリックイベントをバインド（ヘッダーとセルの両方に対応）
+        self.tree.bind("<Button-1>", self.on_tree_click)
 
         # アクションフレーム
         self.post_button = ttk.Button(self.action_frame, text="投稿実行", command=self.execute_post_action, state=tk.DISABLED)
-        self.post_button.pack(pady=10, padx=10)
+        self.post_button.pack(pady=10, padx=10, anchor='n')
 
         # サブプロセスとキューの初期化
         self.process = None
@@ -235,6 +248,37 @@ class ScraperApp:
         except Exception as e:
             messagebox.showerror("保存エラー", f"ファイルのエクスポート中にエラーが発生しました:\n{e}")
 
+    def setup_category_filters(self, results):
+        """結果からカテゴリを抽出し、フィルタ用チェックボックスを作成する"""
+        # 既存のウィジェットをクリア
+        for widget in self.filter_frame.winfo_children():
+            widget.destroy()
+
+        if not results:
+            return
+
+        # カテゴリを抽出し、アルファベット順にソート
+        categories = sorted(list(set(item.get('category', 'N/A') for item in results)))
+        self.category_vars = {}
+
+        # "すべて選択/解除" チェックボックス
+        self.all_categories_var = tk.BooleanVar(value=True)
+        all_cb = ttk.Checkbutton(self.filter_frame, text="すべて選択/解除", variable=self.all_categories_var, command=self.toggle_all_categories)
+        all_cb.pack(side=tk.LEFT, padx=5, pady=2)
+
+        for category in categories:
+            var = tk.BooleanVar(value=True)
+            cb = ttk.Checkbutton(self.filter_frame, text=category, variable=var, command=self.apply_filter)
+            cb.pack(side=tk.LEFT, padx=5, pady=2)
+            self.category_vars[category] = var
+
+    def toggle_all_categories(self):
+        """すべてのカテゴリチェックボックスの状態を切り替える"""
+        is_checked = self.all_categories_var.get()
+        for var in self.category_vars.values():
+            var.set(is_checked)
+        self.apply_filter()
+
     def display_results_in_table(self, results):
         """受け取ったデータ（辞書のリスト）をTreeviewに表示する"""
         # 既存のデータをクリア
@@ -242,6 +286,9 @@ class ScraperApp:
         self.current_results = results # データを保持
 
         if not results:
+            # フィルターもクリア
+            for widget in self.filter_frame.winfo_children():
+                widget.destroy()
             self.export_button.config(state=tk.DISABLED)
             return
 
@@ -249,12 +296,16 @@ class ScraperApp:
 
         # ヘッダーを定義
         headers = {
-            "name": "ユーザー名", "post_status": "投稿ステータス", "category": "カテゴリ",
+            "selection": "☑", "name": "ユーザー名", "post_status": "投稿ステータス", "category": "カテゴリ",
             "comment_text": "生成コメント", "like_count": "いいね", "collect_count": "コレ！", "follow_count": "フォロー", "comment_count": "コメント",
             "latest_action_timestamp": "最終アクション日時",
             "is_following": "フォロー状況", "profile_page_url": "プロフィールURL"
         }
         self.tree["columns"] = list(headers.keys())
+
+        # チェックボックスの状態をリセット
+        self.checked_items = {str(i): False for i in range(len(results))}
+        self.all_rows_checked = False
 
         for key, text in headers.items():
             self.tree.heading(key, text=text)
@@ -262,6 +313,8 @@ class ScraperApp:
             self.tree.column(key, anchor=tk.W, width=100)
 
         # カラム幅の調整
+        self.tree.heading("selection", text="☐") # ヘッダーのチェックボックス
+        self.tree.column("selection", width=40, anchor=tk.CENTER, stretch=False)
         self.tree.column("name", width=150)
         self.tree.column("comment_text", width=200)
         self.tree.column("post_status", width=100, anchor=tk.CENTER)
@@ -275,12 +328,16 @@ class ScraperApp:
         self.tree.column("latest_action_timestamp", width=140, anchor=tk.W)
         self.tree.column("category", width=140)
 
+        # フィルターをセットアップ
+        self.setup_category_filters(results)
+
         # データを挿入
         for i, item in enumerate(results):
             # ブーリアン値を分かりやすい文字列に変換
             is_following_text = "フォロー中" if item.get('is_following', False) else "未フォロー"
 
             values = (
+                "☐", # チェックボックスの初期状態
                 item.get('name', ''),
                 item.get('post_status', '未処理'), # 投稿ステータスの初期値
                 item.get('category', ''),
@@ -296,14 +353,49 @@ class ScraperApp:
             # iidで行を識別できるようにする
             self.tree.insert("", tk.END, iid=str(i), values=values)
 
-    def on_item_select(self, event):
-        """テーブルの行が選択されたときの処理"""
-        if self.tree.selection():
-            self.post_button.config(state=tk.NORMAL)
-        else:
-            self.post_button.config(state=tk.DISABLED)
+        self.apply_filter() # 初期表示
 
-    def on_item_double_click(self, event):
+    def apply_filter(self):
+        """カテゴリフィルターを適用してTreeviewの表示を更新する"""
+        # 既存のデータをクリア
+        self.tree.delete(*self.tree.get_children())
+
+        selected_categories = {cat for cat, var in self.category_vars.items() if var.get()}
+
+        for i, item in enumerate(self.current_results):
+            if item.get('category') in selected_categories:
+                is_following_text = "フォロー中" if item.get('is_following', False) else "未フォロー"
+                checked_char = "☑" if self.checked_items.get(str(i)) else "☐"
+                values = (
+                    checked_char,
+                    item.get('name', ''), item.get('post_status', '未処理'),
+                    item.get('category', ''), item.get('comment_text', ''),
+                    item.get('like_count', 0), item.get('collect_count', 0),
+                    item.get('follow_count', 0), item.get('comment_count', 0),
+                    item.get('latest_action_timestamp', ''), is_following_text,
+                    item.get('profile_page_url', '')
+                )
+                self.tree.insert("", tk.END, iid=str(i), values=values)
+
+    def on_tree_click(self, event):
+        """Treeviewのクリックイベントを処理する（ヘッダーまたはセル）"""
+        region = self.tree.identify("region", event.x, event.y)
+
+        if region == "heading":
+            column_id = self.tree.identify_column(event.x)
+            # "selection"列（#1）のヘッダーがクリックされた場合
+            if column_id == '#1':
+                self.toggle_all_checkboxes()
+        
+        elif region == "cell":
+            column_id = self.tree.identify_column(event.x)
+            item_id = self.tree.identify_row(event.y)
+            # "selection"列（#1）のセルがクリックされた場合
+            if column_id == '#1' and item_id:
+                self.toggle_checkbox(item_id)
+
+
+    def on_tree_double_click(self, event):
         """テーブルの行がダブルクリックされたときの処理"""
         item_id = self.tree.identify_row(event.y)
         if not item_id: return
@@ -319,22 +411,64 @@ class ScraperApp:
         else:
             messagebox.showinfo("URLなし", "このユーザーのプロフィールURLは利用できません。")
 
+    def toggle_all_checkboxes(self):
+        """表示されているすべての行のチェックボックスの状態を切り替える"""
+        visible_items = self.tree.get_children()
+        if not visible_items:
+            return
+
+        # 新しい状態を決定（現在の逆）
+        self.all_rows_checked = not self.all_rows_checked
+        new_state = self.all_rows_checked
+
+        # ヘッダーの表示を更新
+        self.tree.heading("selection", text="☑" if new_state else "☐")
+
+        # 表示されているすべてのアイテムのチェック状態と表示を更新
+        for item_id in visible_items:
+            self.checked_items[item_id] = new_state
+            current_values = list(self.tree.item(item_id, "values"))
+            current_values[0] = "☑" if new_state else "☐"
+            self.tree.item(item_id, values=tuple(current_values))
+        
+        self.update_post_button_state()
+
+    def toggle_checkbox(self, item_id):
+        """指定された行のチェックボックスの状態を切り替える"""
+        current_state = self.checked_items.get(item_id, False)
+        new_state = not current_state
+        self.checked_items[item_id] = new_state
+
+        # 表示を更新
+        current_values = list(self.tree.item(item_id, "values"))
+        current_values[0] = "☑" if new_state else "☐"
+        self.tree.item(item_id, values=tuple(current_values))
+
+        self.update_post_button_state()
+
+    def update_post_button_state(self):
+        """チェック状態に基づいて投稿ボタンの有効/無効を切り替える"""
+        # 1つでもチェックがあれば投稿ボタンを有効化
+        if any(self.checked_items.values()):
+            self.post_button.config(state=tk.NORMAL)
+        else:
+            self.post_button.config(state=tk.DISABLED)
     def execute_post_action(self):
         """選択された行に対して投稿処理を実行する"""
-        selected_ids = self.tree.selection()
-        if not selected_ids:
+        checked_ids = [iid for iid, is_checked in self.checked_items.items() if is_checked]
+
+        if not checked_ids:
             messagebox.showwarning("選択エラー", "投稿するユーザーを選択してください。")
             return
 
-        # 投稿処理は時間がかかる可能性があるため、ボタンを無効化
         self.post_button.config(state=tk.DISABLED)
         self.status_label.config(text="投稿処理を実行中...")
 
-        for item_id in selected_ids:
-            item_data = self.tree.item(item_id)
-            column_keys = self.tree["columns"]
-            item_dict = dict(zip(column_keys, item_data['values']))
-            
+        for item_id in checked_ids:
+            # current_resultsから元のデータを取得
+            original_index = int(item_id)
+            item_dict = self.current_results[original_index]
+
             profile_url = item_dict.get("profile_page_url")
             user_name = item_dict.get("name")
             comment_text = item_dict.get("comment_text") # 生成されたコメントを取得
@@ -349,10 +483,19 @@ class ScraperApp:
             post_thread = threading.Thread(target=self.run_script, args=(command,), daemon=True)
             post_thread.start()
 
-            # 投稿ステータスを「処理中」に更新
-            current_values = list(item_data['values'])
-            current_values[1] = "⏳ 処理中..." # "投稿ステータス"列を更新
-            self.tree.item(item_id, values=tuple(current_values))
+            # 投稿ステータスを「処理中」に更新 (表示されている行のみ)
+            if self.tree.exists(item_id):
+                current_values = list(self.tree.item(item_id, 'values'))
+                current_values[2] = "⏳ 処理中..." # "投稿ステータス"列を更新
+                self.tree.item(item_id, values=tuple(current_values))
+
+            # 処理を開始したアイテムのチェックを内部的に解除
+            self.checked_items[item_id] = False
+
+        # 全てのチェックが解除されたので、ヘッダーも更新
+        self.all_rows_checked = False
+        self.tree.heading("selection", text="☐")
+
             # 実際の完了はログで確認し、手動で更新する想定
 
     def launch_debug_chrome(self):
