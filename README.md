@@ -32,12 +32,8 @@
       ```
 
 3.  **Google Chrome または Chromium**
-    - **Raspberry Pi (Raspbian)の場合:**
-      お使いのOSのバージョンによりパッケージ名が異なります。まず `chromium` を試してください。
-      ```bash
-      sudo apt install chromium -y
-      ```
-      もし上記で失敗した場合は、古いバージョンのOS向けに `sudo apt install chromium-browser -y` を試してください。
+    - **Windowsの場合:** Google Chromeをインストールしてください。
+    - **Raspberry Pi (Raspbian)の場合:** この後の手順でPlaywrightが必要なブラウザをインストールするため、手動でのインストールは不要です。
 
 ### 2. プロジェクトのダウンロード
 
@@ -70,11 +66,12 @@ source venv/bin/activate
 # 4. 必要なライブラリをインストール
 pip install -r requirements.txt
 
-# 5. Playwrightの依存関係をインストール (Linux/Raspberry Piのみ)
-# このコマンドを実行し、表示された `sudo apt-get install ...` から始まるコマンドをコピーして実行してください。
+# 5. Playwrightのシステム依存関係をインストール (Linux/Raspberry Piのみ)
+# このコマンドを実行すると、必要なライブラリをインストールするための `sudo apt-get install ...` から始まるコマンドが表示されます。
+# 表示されたコマンドをコピー＆ペーストして実行してください。
 playwright install-deps
 
-# 6. 自動化に必要なブラウザドライバをインストール
+# 6. Playwright専用のブラウザをインストール
 playwright install
 ```
 

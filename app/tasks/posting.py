@@ -54,6 +54,9 @@ def main(profile_page_url: str, comment_text: str):
                     if attempt + 1 == max_retries:
                         raise
                     time.sleep(3)
+            
+            # ウィンドウを前面に表示してユーザーが操作できるようにする
+            page.bring_to_front()
 
             # --- 3. 投稿カードを探す ---
             logging.info("最初の投稿カードを探しています...")

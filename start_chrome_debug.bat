@@ -17,7 +17,7 @@ set "USER_DATA_DIR=%~dp0chrome-debug-profile"
 echo "Using profile directory: %USER_DATA_DIR%"
 
 REM Start Chrome with remote debugging
-start "Chrome Debug" "%CHROME_PATH%" --remote-debugging-port=9222 --user-data-dir="%USER_DATA_DIR%"
+start "Chrome Debug" "%CHROME_PATH%" --remote-debugging-port=9222 --user-data-dir="%USER_DATA_DIR%" --start-minimized
 
 echo "Chrome started. You can now run your Python script."
 echo "Keep this command window open."
