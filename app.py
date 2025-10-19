@@ -648,17 +648,30 @@ class ScraperApp:
             messagebox.showerror("DB保存エラー", f"投稿ステータスの更新中にDBへの保存に失敗しました:\n{e}")
 
     def launch_debug_chrome(self):
-        """start_chrome_debug.bat を実行してデバッグ用Chromeを起動する"""
-        bat_path = os.path.join(self.project_root, "start_chrome_debug.bat")
-        if os.path.exists(bat_path):
+        """OSに応じて適切なスクリプトを実行し、デバッグ用Chromeを起動する"""
+        script_name = ""
+        if os.name == 'nt':  # Windows
+            script_name = "start_chrome_debug.bat"
+        else:  # Linux, macOSなど
+            script_name = "start_chrome_debug.sh"
+
+        script_path = os.path.join(self.project_root, script_name)
+
+        if os.path.exists(script_path):
             try:
-                # コンソールウィンドウを表示せずにバッチファイルを実行
-                subprocess.Popen([bat_path], creationflags=subprocess.CREATE_NO_WINDOW)
-                self.log_text.insert(tk.END, "デバッグ用Chromeの起動を試みました。\n")
+                if os.name == 'nt':
+                    # Windows: コンソールウィンドウを表示せずにバッチファイルを実行
+                    subprocess.Popen([script_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                else:
+                    # Linux/macOS: 実行権限があることを確認
+                    if not os.access(script_path, os.X_OK):
+                        self.log_text.insert(tk.END, f"警告: {script_name} に実行権限がありません。'chmod +x {script_name}' を実行してください。\n")
+                    subprocess.Popen([script_path])
+                self.log_text.insert(tk.END, f"{script_name} を実行してChromeの起動を試みました。\n")
             except Exception as e:
                 self.log_text.insert(tk.END, f"Chromeの起動に失敗しました: {e}\n")
         else:
-            self.log_text.insert(tk.END, "start_chrome_debug.bat が見つかりません。\n")
+            self.log_text.insert(tk.END, f"起動スクリプト ({script_name}) が見つかりません。\n")
 
 
 if __name__ == "__main__":
