@@ -349,11 +349,11 @@ def main():
                     if templates:
                         comment_template = random.choice(templates)
                         natural_name = extract_natural_name(user.get('name', ''))
-                        if natural_name:
-                            # 名前が取得できた場合は、名前を挿入
+                        # 名前が取得でき、かつ10文字以下の場合のみ名前を挿入
+                        if natural_name and len(natural_name) <= 10:
                             user['comment_text'] = comment_template.format(user_name=natural_name)
                         else:
-                            # 名前が取得できなかった場合は、プレースホルダー部分を削除して不自然さをなくす
+                            # 名前が取得できなかったり長すぎる場合は、プレースホルダー部分を削除して不自然さをなくす
                             user['comment_text'] = comment_template.replace("{user_name}さん、", "").strip()
                     else:
                         user['comment_text'] = "ご訪問ありがとうございます！" # フォールバック

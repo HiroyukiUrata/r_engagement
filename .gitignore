@@ -7,13 +7,33 @@ __pycache__/
 # Virtual Environments
 .venv
 venv/
+# Virtualenv
+/venv
+/.venv
 
 # IDE / Editor
 .vscode/
 .idea/
+# IDE/Editor specific
+/.vscode/
+/.idea/
 
 # Application-specific
 chrome-debug-profile/
 scraping_results.json
 error_*.png
 .DS_Store
+# --- Application Specific ---
+
+# Database files (should be generated on each machine)
+/db/*.json
+
+# Output directory
+/output/
+
+# Log files
+*.log
+
+# Windows batch file (might contain user-specific paths)
+/start_chrome_debug.bat
+db/engagement_data.json
