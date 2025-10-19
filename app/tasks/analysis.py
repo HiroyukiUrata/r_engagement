@@ -350,7 +350,7 @@ def main():
                         comment_template = random.choice(templates)
                         natural_name = extract_natural_name(user.get('name', ''))
                         # 名前が取得でき、かつ10文字以下の場合のみ名前を挿入
-                        if natural_name and len(natural_name) <= 10:
+                        if natural_name and len(natural_name) <= 6:
                             user['comment_text'] = comment_template.format(user_name=natural_name)
                         else:
                             # 名前が取得できなかったり長すぎる場合は、プレースホルダー部分を削除して不自然さをなくす
