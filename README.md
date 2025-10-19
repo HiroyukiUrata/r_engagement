@@ -33,9 +33,11 @@
 
 3.  **Google Chrome または Chromium**
     - **Raspberry Pi (Raspbian)の場合:**
+      お使いのOSのバージョンによりパッケージ名が異なります。まず `chromium` を試してください。
       ```bash
-      sudo apt install chromium-browser -y
+      sudo apt install chromium -y
       ```
+      もし上記で失敗した場合は、古いバージョンのOS向けに `sudo apt install chromium-browser -y` を試してください。
 
 ### 2. プロジェクトのダウンロード
 
@@ -68,7 +70,11 @@ source venv/bin/activate
 # 4. 必要なライブラリをインストール
 pip install -r requirements.txt
 
-# 5. 自動化に必要なブラウザドライバをインストール
+# 5. Playwrightの依存関係をインストール (Linux/Raspberry Piのみ)
+# このコマンドを実行し、表示された `sudo apt-get install ...` から始まるコマンドをコピーして実行してください。
+playwright install-deps
+
+# 6. 自動化に必要なブラウザドライバをインストール
 playwright install
 ```
 
@@ -80,15 +86,8 @@ playwright install
 プロジェクトフォルダ内の `start_chrome_debug.bat` をダブルクリックして起動します。
 
 **Raspberry Pi / Linux の場合:**
-プロジェクトフォルダ内に `start_chrome_debug.sh` という名前でファイルを作成し、以下の内容を貼り付けてください。
-
-```bash
-#!/bin/bash
-echo "Starting Chromium in debug mode on port 9222..."
-chromium-browser --remote-debugging-port=9222 --user-data-dir="$(dirname "$0")/chrome-debug-profile" --no-sandbox
-```
-
-作成したファイルに実行権限を与えてから、ターミナルで実行します。
+このリポジトリには `start_chrome_debug.sh` が含まれています。
+以下のコマンドを実行してスクリプトに実行権限を与え、起動します。
 ```bash
 chmod +x start_chrome_debug.sh
 ./start_chrome_debug.sh
