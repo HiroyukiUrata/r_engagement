@@ -58,12 +58,45 @@ def main(profile_page_url: str, comment_text: str):
             # ウィンドウを前面に表示してユーザーが操作できるようにする
             page.bring_to_front()
 
-            # --- 3. 投稿カードを探す ---
-            logging.info("最初の投稿カードを探しています...")
-            original_post_selector = 'div.container--a3dH_ a.link-image--15_8Q'
-            post_card_image_locator = page.locator(convert_to_robust_selector(original_post_selector)).first
-            post_card_image_locator.wait_for(state="visible", timeout=15000)
-            logging.info("投稿カードが見つかりました。")
+            # --- 3. クリック対象の投稿カードを探す ---
+            logging.info("コメント数が最も多い投稿を探しています...")
+            
+            # 投稿カード全体を特定するセレクター
+            post_cards_locator = page.locator(convert_to_robust_selector("div.container--a3dH_"))
+            post_cards_locator.first.wait_for(state="visible", timeout=15000)
+            
+            all_posts = post_cards_locator.all()
+            if not all_posts:
+                logging.error("投稿が見つかりませんでした。")
+                return
+
+            max_comments = -1
+            target_post_card = all_posts[0] # フォールバックとして最初の投稿を保持
+
+            for post_card in all_posts:
+                try:
+                    # コメントアイコンの隣の要素からコメント数を取得
+                    comment_icon = post_card.locator(convert_to_robust_selector("div.rex-comment-outline--2vaPK"))
+                    comment_count_element = comment_icon.locator("xpath=./following-sibling::div[1]")
+                    
+                    comment_count = 0
+                    if comment_count_element.count() > 0:
+                        comment_count = int(comment_count_element.inner_text())
+
+                    if comment_count > max_comments:
+                        max_comments = comment_count
+                        target_post_card = post_card
+                except (ValueError, PlaywrightError):
+                    # コメント数が取得できない場合はスキップ
+                    continue
+            
+            # 1件以上のコメントを持つ投稿が見つからなかった場合、最初の投稿カードを対象とする
+            if max_comments < 1:
+                logging.info("コメントが1件以上の投稿が見つからなかったため、最初の投稿を対象とします。")
+                target_post_card = all_posts[0]
+            else:
+                logging.info(f"コメント数が最も多い投稿が見つかりました (コメント数: {max_comments})。")
+            post_card_image_locator = target_post_card.locator(convert_to_robust_selector("a.link-image--15_8Q"))
 
             # --- 4. 投稿カードの画像をクリック ---
             logging.info("投稿カードの画像をクリックします...")
